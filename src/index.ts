@@ -25,6 +25,7 @@ process.on('SIGINT', () => {
 
 // Phase 2: basic renderer demo
 import { Renderer, createPlayfieldBuffer } from './engine/renderer';
+import { Input } from './engine/input';
 import { BOARD_HEIGHT, BOARD_WIDTH, CELL_PIXELS } from './core/constants';
 
 function centerOrigin(widthCells: number, heightCells: number) {
@@ -58,6 +59,60 @@ async function main() {
   let prev: ReturnType<typeof createPlayfieldBuffer> | undefined = undefined;
   let cur = createPlayfieldBuffer();
 
+  // Demo piece: T tetromino in 3x3 bounding box across 4 rotations
+  const T_ROT: ReadonlyArray<ReadonlyArray<[number, number]>> = [
+    // up
+    [ [1,0], [0,1], [1,1], [2,1] ],
+    // right
+    [ [1,0], [1,1], [1,2], [2,1] ],
+    // down
+    [ [0,1], [1,1], [2,1], [1,2] ],
+    // left
+    [ [1,0], [0,1], [1,1], [1,2] ],
+  ];
+  const PIECE_BOX_W = 3;
+  const PIECE_BOX_H = 3;
+
+  // Demo piece state (top-left of 3x3 box)
+  let px = Math.floor((BOARD_WIDTH - PIECE_BOX_W) / 2);
+  let py = Math.floor((BOARD_HEIGHT - PIECE_BOX_H) / 2);
+  let prot = 0; // 0..3
+  let paused = false;
+
+  const clampPos = () => {
+    const cells = T_ROT[prot];
+    let maxOx = 0, maxOy = 0;
+    for (const [ox, oy] of cells) {
+      if (ox > maxOx) maxOx = ox;
+      if (oy > maxOy) maxOy = oy;
+    }
+    if (px < 0) px = 0;
+    if (py < 0) py = 0;
+    const maxPx = Math.max(0, BOARD_WIDTH - 1 - maxOx);
+    const maxPy = Math.max(0, BOARD_HEIGHT - 1 - maxOy);
+    if (px > maxPx) px = maxPx;
+    if (py > maxPy) py = maxPy;
+  };
+
+  // Input setup
+  const input = new Input(process.stdin);
+  input.onKey((k) => {
+    if (k === 'q' || k === 'ctrl-c') {
+      clearInterval(interval);
+      cleanup();
+      process.exit(0);
+    }
+    if (k === 'p') paused = !paused;
+    if (paused) return;
+    if (k === 'left') { px -= 1; clampPos(); }
+    if (k === 'right') { px += 1; clampPos(); }
+    if (k === 'up') { py -= 1; clampPos(); }
+    if (k === 'down') { py += 1; clampPos(); }
+    if (k === 'z') { prot = (prot + 3) & 3; clampPos(); }
+    if (k === 'x') { prot = (prot + 1) & 3; clampPos(); }
+  });
+  input.start();
+
   // draw border once (simple single-line box)
   const cellW = CELL_PIXELS.length;
   const innerW = widthCells * cellW;
@@ -77,6 +132,7 @@ async function main() {
   let bandPos = 0;
   let bandDir = 1; // 1=down, -1=up
   const tick = () => {
+    if (paused) return; // freeze frame when paused
     const next = cur.clone();
 
     // fill whole playfield with black for contrast
@@ -86,7 +142,33 @@ async function main() {
       }
     }
 
-    // update band position (bounce between 0 and height-3)
+    // moving band animation (background)
+    if (bandPos < next.height - 2) {
+      for (let y = bandPos; y < bandPos + 3; y++) {
+        for (let x = 0; x < next.width; x++) {
+          const idx = ((x + t) % 6) + 1; // 1..6 (no white)
+          next.cells[y][x].bg = idx as 1 | 2 | 3 | 4 | 5 | 6;
+        }
+      }
+    }
+
+    // draw rotatable T piece (magenta)
+    const cells = T_ROT[prot];
+    for (const [ox, oy] of cells) {
+      const gx = px + ox;
+      const gy = py + oy;
+      if (gx >= 0 && gx < next.width && gy >= 0 && gy < next.height) {
+        next.cells[gy][gx].bg = 5; // magenta
+      }
+    }
+
+    // draw frame
+    renderer.draw(next, prev);
+    prev = next;
+    cur = next;
+    t++;
+
+    // update band position (bounce)
     if (t % 2 === 0) {
       bandPos += bandDir;
       if (bandPos <= 0) {
@@ -97,24 +179,6 @@ async function main() {
         bandDir = -1;
       }
     }
-
-    // draw a 3-row band cycling colors (avoid white)
-    for (let y = bandPos; y < bandPos + 3; y++) {
-      for (let x = 0; x < next.width; x++) {
-        const idx = ((x + t) % 6) + 1; // 1..6 (no white)
-        next.cells[y][x].bg = idx as 1 | 2 | 3 | 4 | 5 | 6;
-      }
-    }
-
-    // Force full redraw when touching bottom to ensure last line updates
-    if (bandPos === next.height - 3) {
-      renderer.draw(next, undefined);
-    } else {
-      renderer.draw(next, prev);
-    }
-    prev = next;
-    cur = next;
-    t++;
   };
 
   const interval = setInterval(tick, 1000 / 30);
