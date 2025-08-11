@@ -1,5 +1,5 @@
 import { color, cursor } from './ansi';
-import { BOARD_HEIGHT, BOARD_WIDTH, CELL_PIXELS, ColorCode } from '../core/constants';
+import { BOARD_WIDTH, CELL_PIXELS, ColorCode, VISIBLE_HEIGHT, HIDDEN_ROWS } from '../core/constants';
 
 export type Cell = {
   bg: ColorCode | null;
@@ -125,7 +125,36 @@ export class Renderer {
   }
 }
 
-// Utility to make a playfield-sized frame buffer
+// Utility to make a playfield-sized frame buffer for visible area
 export function createPlayfieldBuffer() {
-  return new FrameBuffer(BOARD_WIDTH, BOARD_HEIGHT);
+  return new FrameBuffer(BOARD_WIDTH, VISIBLE_HEIGHT);
+}
+
+// Draw board + active piece into a framebuffer (visible rows only)
+export function blitBoardToBuffer(
+  fb: FrameBuffer,
+  board: { width: number; height: number; get(x: number, y: number): any },
+  active?: { cells(): Array<{ x: number; y: number }>; color: ColorCode }
+) {
+  // background black
+  for (let y = 0; y < fb.height; y++) {
+    for (let x = 0; x < fb.width; x++) fb.cells[y][x].bg = 0;
+  }
+  // board blocks (skip hidden rows)
+  for (let vy = 0; vy < fb.height; vy++) {
+    const by = vy + HIDDEN_ROWS; // map visible y to board y
+    for (let x = 0; x < fb.width; x++) {
+      const c = board.get(x, by);
+      fb.cells[vy][x].bg = c ?? fb.cells[vy][x].bg;
+    }
+  }
+  // active piece
+  if (active) {
+    for (const { x, y } of active.cells()) {
+      if (y >= 0) {
+        const vy = y - HIDDEN_ROWS;
+        if (vy >= 0 && vy < fb.height && x >= 0 && x < fb.width) fb.cells[vy][x].bg = active.color;
+      }
+    }
+  }
 }
