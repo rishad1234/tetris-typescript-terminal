@@ -28,9 +28,10 @@ import { Renderer, createPlayfieldBuffer, blitBoardToBuffer } from './engine/ren
 import { Input } from './engine/input';
 import { BOARD_WIDTH, CELL_PIXELS, VISIBLE_HEIGHT, HIDDEN_ROWS } from './core/constants';
 import { Board } from './game/board';
-import { PIECES, PieceDef } from './game/pieces';
+import { PIECES, PieceDef, PieceKind, getRotation } from './game/pieces';
 import { ActivePiece } from './game/activePiece';
 import { Bag7 } from './game/randomizer';
+import { color } from './engine/ansi';
 
 function centerOrigin(widthCells: number, heightCells: number) {
   const cellW = CELL_PIXELS.length;
@@ -38,7 +39,9 @@ function centerOrigin(widthCells: number, heightCells: number) {
   const termRows = process.stdout.rows ?? 24;
   const usedRows = heightCells + 2; // include top+bottom border
 
-  const col = Math.max(1, Math.floor((termCols - widthCells * cellW) / 2) + 1);
+  // Center the entire bordered playfield (inner width + 2 border columns)
+  const totalW = widthCells * cellW + 2;
+  const col = Math.max(1, Math.floor((termCols - totalW) / 2) + 1);
 
   // Center vertically
   const row = Math.max(1, Math.floor((termRows - usedRows) / 2) + 1);
@@ -48,6 +51,14 @@ function centerOrigin(widthCells: number, heightCells: number) {
 
 function spawnPiece(board: Board, bag: Bag7): ActivePiece {
   const kind = bag.next();
+  const def: PieceDef = PIECES[kind];
+  const spawnX = def.spawnOffset?.x ?? 3;
+  const spawnY = (def.spawnOffset?.y ?? 0) - HIDDEN_ROWS; // start in hidden
+  return new ActivePiece(def, spawnX, spawnY, 0);
+}
+
+// Create active piece from a known kind (used when managing next queue)
+function spawnPieceFromKind(kind: PieceKind): ActivePiece {
   const def: PieceDef = PIECES[kind];
   const spawnX = def.spawnOffset?.x ?? 3;
   const spawnY = (def.spawnOffset?.y ?? 0) - HIDDEN_ROWS; // start in hidden
@@ -68,12 +79,26 @@ async function main() {
   const heightCells = VISIBLE_HEIGHT;
   const { row, col } = centerOrigin(widthCells, heightCells);
   const renderer = new Renderer(row + 1, col + 1); // +1 to leave border space
+  // Track current origin (top-left of border) so HUD/messages stay aligned across resizes
+  let originTop = row;
+  let originLeft = col;
   let prev: ReturnType<typeof createPlayfieldBuffer> | undefined = undefined;
   let cur = createPlayfieldBuffer();
 
   const board = new Board();
   const bag = new Bag7();
-  let active = spawnPiece(board, bag);
+
+  // HUD + game stats
+  let score = 0;
+  let lines = 0;
+  let level = 1;
+  const baseScores: Record<number, number> = { 1: 100, 2: 300, 3: 500, 4: 800 };
+  const updateLevel = () => { level = Math.floor(lines / 10) + 1; };
+
+  // Next piece queue
+  let nextKind: PieceKind = bag.next();
+  let active = spawnPieceFromKind(nextKind);
+  nextKind = bag.next();
 
   // Input and controls
   let paused = false;
@@ -81,11 +106,54 @@ async function main() {
   let gameOver = false;
   let interval: ReturnType<typeof setInterval>;
 
+  // HUD helpers (compute positions per call so resize can redraw with new row/col)
+  const HUD_GAP = 4; // gap between playfield border and HUD
+  const hudPad = 36; // HUD content width (clearing/padding)
+  const writeHudLine = (rowPos: number, colPos: number, text: string) => {
+    const s = text.padEnd(hudPad, ' ');
+    process.stdout.write(ESC(`${rowPos};${colPos}H`) + s);
+  };
+  const drawNextPreview = (kind: PieceKind, r: number, c: number) => {
+    const def = PIECES[kind];
+    const rot = getRotation(def, 0);
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [ox, oy] of rot) { if (ox < minX) minX = ox; if (ox > maxX) maxX = ox; if (oy < minY) minY = oy; if (oy > maxY) maxY = oy; }
+    const w = maxX - minX + 1; const h = maxY - minY + 1;
+    const offX = Math.floor((4 - w) / 2) - minX; const offY = Math.floor((4 - h) / 2) - minY;
+  const hudCol = (c + (widthCells * CELL_PIXELS.length) + 1) + HUD_GAP;
+    // clear preview area (4 rows)
+    for (let i = 0; i < 4; i++) process.stdout.write(ESC(`${r + 2 + i};${hudCol}H`) + ' '.repeat(hudPad));
+    const cell = CELL_PIXELS; const bg = def.color;
+    const makeRow = (y: number) => {
+      let out = '';
+      out += color.reset();
+      for (let x = 0; x < 4; x++) {
+        let filled = false; for (const [ox, oy] of rot) { if (x === ox + offX && y === oy + offY) { filled = true; break; } }
+        out += color.bg(filled ? bg : 0) + cell;
+      }
+      out += color.reset();
+      return out;
+    };
+    for (let y = 0; y < 4; y++) process.stdout.write(ESC(`${r + 2 + y};${hudCol}H`) + makeRow(y));
+  };
+  let lastHud: { score: number; lines: number; level: number; next: PieceKind } | null = null;
+  const drawHUD = (force = false, r = originTop, c = originLeft) => {
+    const curHud = { score, lines, level, next: nextKind };
+    if (!force && lastHud && lastHud.score === score && lastHud.lines === lines && lastHud.level === level && lastHud.next === nextKind) return;
+  const hudCol = (c + (widthCells * CELL_PIXELS.length) + 1) + HUD_GAP;
+    writeHudLine(r, hudCol, 'Score: ' + score);
+    writeHudLine(r + 1, hudCol, 'Lines: ' + lines);
+    writeHudLine(r + 2 + 4, hudCol, 'Next:');
+    drawNextPreview(nextKind, r, c);
+    writeHudLine(r + 2 + 5, hudCol, 'Level: ' + level);
+    lastHud = curHud;
+  };
+
   const printGameOver = () => {
     const cellW = CELL_PIXELS.length;
     const innerW = widthCells * cellW;
-    const bottom = row + heightCells + 1;
-    const left = col;
+    const bottom = originTop + heightCells + 1;
+    const left = originLeft;
     const raw = ' GAME OVER: r=restart, q=quit ';
     const msg = raw.slice(0, innerW); // avoid overflow beyond inner area
     const pad = Math.max(0, Math.floor((innerW - msg.length) / 2));
@@ -98,8 +166,8 @@ async function main() {
   const printPaused = () => {
     const cellW = CELL_PIXELS.length;
     const innerW = widthCells * cellW;
-    const bottom = row + heightCells + 1;
-    const left = col;
+    const bottom = originTop + heightCells + 1;
+    const left = originLeft;
     const raw = ' PAUSED: press p to resume ';
     const msg = raw.slice(0, innerW);
     const pad = Math.max(0, Math.floor((innerW - msg.length) / 2));
@@ -108,7 +176,7 @@ async function main() {
   };
 
   const clearStatusLine = () => {
-    const bottom = row + heightCells + 1;
+    const bottom = originTop + heightCells + 1;
     // clear entire terminal line to avoid any leftover text
     process.stdout.write(ESC(`${bottom + 1};1H`) + ESC('2K'));
   };
@@ -151,8 +219,12 @@ async function main() {
       if (d > 0) active.move(board, 0, d);
       // lock immediately
       for (const { x, y } of active.cells()) if (y >= 0) board.set(x, y, active.color);
-      board.clearLines();
-      active = spawnPiece(board, bag);
+      const cleared = board.clearLines();
+      if (cleared > 0) { lines += cleared; score += (baseScores[cleared] || 0) * level; updateLevel(); }
+      // spawn from queue
+      active = spawnPieceFromKind(nextKind);
+      nextKind = bag.next();
+      drawHUD(true);
       if (active.collides(board)) {
         gameOver = true;
         printGameOver();
@@ -195,8 +267,11 @@ async function main() {
       if (!moved) {
         // lock
         for (const { x, y } of active.cells()) if (y >= 0) board.set(x, y, active.color);
-        board.clearLines();
-        active = spawnPiece(board, bag);
+        const cleared = board.clearLines();
+        if (cleared > 0) { lines += cleared; score += (baseScores[cleared] || 0) * level; updateLevel(); }
+        active = spawnPieceFromKind(nextKind);
+        nextKind = bag.next();
+        drawHUD(true);
         if (active.collides(board)) {
           gameOver = true;
           printGameOver();
@@ -212,6 +287,8 @@ async function main() {
     renderer.draw(next, prev);
     prev = next;
     cur = next;
+    // cheap HUD update; will skip if unchanged
+    drawHUD();
   };
 
   interval = setInterval(tick, 1000 / 30);
@@ -219,6 +296,8 @@ async function main() {
   process.stdout.on('resize', () => {
     clear();
     const { row: r, col: c } = centerOrigin(widthCells, heightCells);
+  originTop = r;
+  originLeft = c;
     // redraw border at new location
     const left2 = c;
     const top2 = r;
@@ -233,6 +312,8 @@ async function main() {
 
     renderer.setOrigin(r + 1, c + 1);
     prev = undefined; // force full redraw
+    // redraw HUD aligned to new position
+  drawHUD(true);
   });
 
   process.stdin.on('data', (buf: Buffer) => {
