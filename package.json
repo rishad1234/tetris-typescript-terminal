@@ -8,15 +8,21 @@
     "dev": "ts-node --transpile-only src/index.ts",
     "build": "tsup src/index.ts --format cjs --dts=false --clean --minify --out-dir dist",
     "start": "node dist/index.js",
-    "test": "echo \"No tests yet\""
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
-  "keywords": ["tetris", "terminal", "typescript"],
+  "keywords": [
+    "tetris",
+    "terminal",
+    "typescript"
+  ],
   "author": "",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^24.2.1",
     "ts-node": "^10.9.2",
     "tsup": "^8.5.0",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "vitest": "^2.1.9"
   }
 }
