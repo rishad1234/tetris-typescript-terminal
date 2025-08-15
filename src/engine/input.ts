@@ -9,6 +9,7 @@ export type Key =
   | 'space'
   | 'p'
   | 'q'
+  | 'r'
   | 'ctrl-c';
 
 export class Input {
@@ -74,7 +75,7 @@ export class Input {
       // Letters (lowercase)
       if (b >= 0x61 && b <= 0x7a) {
         const ch = String.fromCharCode(b);
-        if (ch === 'z' || ch === 'x' || ch === 'c' || ch === 'p' || ch === 'q') out.push(ch as Key);
+        if (ch === 'z' || ch === 'x' || ch === 'c' || ch === 'p' || ch === 'q' || ch === 'r') out.push(ch as Key);
         continue;
       }
     }

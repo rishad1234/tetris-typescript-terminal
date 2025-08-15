@@ -86,21 +86,60 @@ async function main() {
     const innerW = widthCells * cellW;
     const bottom = row + heightCells + 1;
     const left = col;
-    const message = ' GAME OVER — press q to quit ';
-    const pad = Math.max(0, Math.floor((innerW - message.length) / 2));
-    process.stdout.write(ESC(`${bottom + 1};${left + 1}H`) + ' '.repeat(innerW));
-    process.stdout.write(ESC(`${bottom + 1};${left + 1}H`) + ' '.repeat(pad) + message);
+    const raw = ' GAME OVER: r=restart, q=quit ';
+    const msg = raw.slice(0, innerW); // avoid overflow beyond inner area
+    const pad = Math.max(0, Math.floor((innerW - msg.length) / 2));
+    // clear full status line to avoid leftovers
+    process.stdout.write(ESC(`${bottom + 1};1H`) + ESC('2K'));
+    // write centered within inner area
+    process.stdout.write(ESC(`${bottom + 1};${left + 1}H`) + ' '.repeat(pad) + msg);
+  };
+
+  const printPaused = () => {
+    const cellW = CELL_PIXELS.length;
+    const innerW = widthCells * cellW;
+    const bottom = row + heightCells + 1;
+    const left = col;
+    const raw = ' PAUSED: press p to resume ';
+    const msg = raw.slice(0, innerW);
+    const pad = Math.max(0, Math.floor((innerW - msg.length) / 2));
+    process.stdout.write(ESC(`${bottom + 1};1H`) + ESC('2K'));
+    process.stdout.write(ESC(`${bottom + 1};${left + 1}H`) + ' '.repeat(pad) + msg);
+  };
+
+  const clearStatusLine = () => {
+    const bottom = row + heightCells + 1;
+    // clear entire terminal line to avoid any leftover text
+    process.stdout.write(ESC(`${bottom + 1};1H`) + ESC('2K'));
   };
 
   const input = new Input(process.stdin);
   input.onKey((k) => {
     if (k === 'q' || k === 'ctrl-c') {
       clearInterval(interval);
+      clearStatusLine();
       cleanup();
       process.exit(0);
     }
-    if (gameOver) return; // ignore all inputs except quit
-    if (k === 'p') { paused = !paused; return; }
+    if (gameOver) {
+      if (k === 'r') {
+        // restart
+        board.reset();
+        active = spawnPiece(board, bag);
+        paused = false;
+        softDrop = false;
+        gameOver = false;
+        clearStatusLine();
+        // resume loop if it was stopped
+        interval = setInterval(tick, 1000 / 30);
+      }
+      return; // ignore other inputs when over
+    }
+    if (k === 'p') {
+      paused = !paused;
+      if (paused) printPaused(); else clearStatusLine();
+      return;
+    }
     if (paused) return;
 
     if (k === 'left') active.move(board, -1, 0);
@@ -200,6 +239,7 @@ async function main() {
     const bytes = [...buf.values()];
     if (bytes.length === 1 && bytes[0] === 113 /* q */) {
       clearInterval(interval);
+      clearStatusLine();
       cleanup();
       process.exit(0);
     }
