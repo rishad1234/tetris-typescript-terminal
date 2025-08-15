@@ -51,12 +51,7 @@ function spawnPiece(board: Board, bag: Bag7): ActivePiece {
   const def: PieceDef = PIECES[kind];
   const spawnX = def.spawnOffset?.x ?? 3;
   const spawnY = (def.spawnOffset?.y ?? 0) - HIDDEN_ROWS; // start in hidden
-  const ap = new ActivePiece(def, spawnX, spawnY, 0);
-  // If immediate collision, game over will be handled later. For now, nudge down until not colliding or fail.
-  if (ap.collides(board)) {
-    ap.y += 1;
-  }
-  return ap;
+  return new ActivePiece(def, spawnX, spawnY, 0);
 }
 
 async function main() {
@@ -83,6 +78,19 @@ async function main() {
   // Input and controls
   let paused = false;
   let softDrop = false;
+  let gameOver = false;
+  let interval: ReturnType<typeof setInterval>;
+
+  const printGameOver = () => {
+    const cellW = CELL_PIXELS.length;
+    const innerW = widthCells * cellW;
+    const bottom = row + heightCells + 1;
+    const left = col;
+    const message = ' GAME OVER — press q to quit ';
+    const pad = Math.max(0, Math.floor((innerW - message.length) / 2));
+    process.stdout.write(ESC(`${bottom + 1};${left + 1}H`) + ' '.repeat(innerW));
+    process.stdout.write(ESC(`${bottom + 1};${left + 1}H`) + ' '.repeat(pad) + message);
+  };
 
   const input = new Input(process.stdin);
   input.onKey((k) => {
@@ -91,6 +99,7 @@ async function main() {
       cleanup();
       process.exit(0);
     }
+    if (gameOver) return; // ignore all inputs except quit
     if (k === 'p') { paused = !paused; return; }
     if (paused) return;
 
@@ -105,6 +114,11 @@ async function main() {
       for (const { x, y } of active.cells()) if (y >= 0) board.set(x, y, active.color);
       board.clearLines();
       active = spawnPiece(board, bag);
+      if (active.collides(board)) {
+        gameOver = true;
+        printGameOver();
+        clearInterval(interval);
+      }
     }
     if (k === 'z') active.rotate(board, -1);
     if (k === 'x') active.rotate(board, +1);
@@ -131,7 +145,7 @@ async function main() {
   let fallCounter = 0;
 
   const tick = () => {
-    if (paused) return; // freeze frame when paused
+    if (paused || gameOver) return; // freeze frame when paused or over
 
     // gravity
     const speed = softDrop ? 1 : GRAVITY_TICKS;
@@ -144,6 +158,12 @@ async function main() {
         for (const { x, y } of active.cells()) if (y >= 0) board.set(x, y, active.color);
         board.clearLines();
         active = spawnPiece(board, bag);
+        if (active.collides(board)) {
+          gameOver = true;
+          printGameOver();
+          clearInterval(interval);
+          return;
+        }
       }
       softDrop = false; // consume soft drop
     }
@@ -155,7 +175,7 @@ async function main() {
     cur = next;
   };
 
-  const interval = setInterval(tick, 1000 / 30);
+  interval = setInterval(tick, 1000 / 30);
 
   process.stdout.on('resize', () => {
     clear();
