@@ -61,11 +61,14 @@ export class ActivePiece {
 
   hardDropDistance(board: Board): number {
     let d = 0;
+    const oldY = this.y;
     while (true) {
       this.y++;
       if (this.collides(board)) { this.y--; break; }
       d++;
     }
+    // restore to original position; caller will move by d if desired
+    this.y = oldY;
     return d;
   }
 }
